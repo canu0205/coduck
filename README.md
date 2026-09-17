@@ -24,7 +24,13 @@ curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/canu0205/coduck/releases/latest/download/coduck-installer.sh | sh
 ```
 
-make sure `~/.cargo/bin` is on your `PATH`.
+add Coduck to your `PATH` so the `coduck` command works in every Terminal window:
+
+```sh
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zshrc
+```
+
+then close and reopen Terminal.
 
 2. build from source
 
@@ -59,24 +65,6 @@ coduck logout personal
 
 - early macos prototype. other codex versions, named codex configuration profiles,
   and ctrl-z suspension are not supported yet.
-
-## release
-
-update the version in `Cargo.toml`, run the checks, commit it, then push a signed
-tag:
-
-```sh
-cargo check
-cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-git add Cargo.toml Cargo.lock
-git commit -m "release vX.Y.Z"
-git tag -s vX.Y.Z -m vX.Y.Z
-git push origin main vX.Y.Z
-```
-
-`dist` builds both macos architectures and publishes the github release.
 
 ## license
 
