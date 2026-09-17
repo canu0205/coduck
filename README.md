@@ -13,13 +13,20 @@ local sessions stay shared. your usual `codex` login stays separate.
 
 ## install
 
-requires **macos**, **rust 1.90+**, and **codex cli 0.154.0**.
+requires **macos** and **codex cli 0.154.0**.
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/canu0205/coduck/releases/latest/download/coduck-installer.sh | sh
+```
+
+make sure `~/.cargo/bin` is on your `PATH`.
+
+to build from source, install rust 1.90+ and run:
 
 ```sh
 cargo install --git https://github.com/canu0205/coduck --locked
 ```
-
-make sure `~/.cargo/bin` is on your `PATH`.
 
 ## use
 
@@ -46,3 +53,25 @@ coduck logout personal
 
 - early macos prototype. other codex versions, named codex configuration profiles,
   and ctrl-z suspension are not supported yet.
+
+## release
+
+update the version in `Cargo.toml`, run the checks, commit it, then push a signed
+tag:
+
+```sh
+cargo check
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+git add Cargo.toml Cargo.lock
+git commit -m "release vX.Y.Z"
+git tag -s vX.Y.Z -m vX.Y.Z
+git push origin main vX.Y.Z
+```
+
+`dist` builds both macos architectures and publishes the github release.
+
+## license
+
+mit. the mascot is cc0.

@@ -1,0 +1,11 @@
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.32.0"
+ci = "github"
+installers = ["shell"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+install-path = "CARGO_HOME"
+hosting = "github"
+install-updater = false
