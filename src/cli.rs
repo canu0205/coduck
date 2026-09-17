@@ -100,29 +100,80 @@ pub async fn execute(args: Args) -> Result<()> {
     result.and(stopped).and(cleared)
 }
 fn list_profiles(store: &ProfileStore) -> Result<String> {
+    enum ProfileRow {
+        Complete([String; 4]),
+        Incomplete { name: String, message: String },
+    }
+
     let profiles = store.list()?;
     if profiles.is_empty() {
         return Ok("No profiles. Use coduck login NAME.\n".into());
     }
-    let mut output = "PROFILE\tCACHED IDENTITY\tPLAN\tLAST VERIFIED (UNIX SECONDS)\n".to_owned();
+    let headers = [
+        "PROFILE",
+        "CACHED IDENTITY",
+        "PLAN",
+        "LAST VERIFIED (UNIX SECONDS)",
+    ];
+    let mut rows = Vec::with_capacity(profiles.len());
     for profile in profiles {
+        let name = profile.name;
         match profile.metadata {
-            Some(metadata) => output.push_str(&format!(
-                "{}\t{}\t{}\t{}\n",
-                profile.name,
+            Some(metadata) => rows.push(ProfileRow::Complete([
+                name,
                 metadata
                     .identity
                     .email
                     .as_deref()
-                    .unwrap_or(&metadata.identity.account_id),
+                    .unwrap_or(&metadata.identity.account_id)
+                    .to_owned(),
                 metadata.identity.plan_type,
-                metadata.last_verified
-            )),
-            None => output.push_str(&format!(
-                "{}\tincomplete; use coduck login {}\n",
-                profile.name, profile.name
-            )),
+                metadata.last_verified.to_string(),
+            ])),
+            None => rows.push(ProfileRow::Incomplete {
+                message: format!("incomplete; use coduck login {name}"),
+                name,
+            }),
         }
+    }
+    let widths = headers.map(str::len);
+    let widths = rows.iter().fold(widths, |mut widths, row| {
+        if let ProfileRow::Complete(row) = row {
+            for (index, value) in row.iter().enumerate() {
+                widths[index] = widths[index].max(value.len());
+            }
+        }
+        widths
+    });
+    let mut output = String::new();
+    for (index, header) in headers.iter().enumerate() {
+        if index + 1 == headers.len() {
+            output.push_str(header);
+        } else {
+            output.push_str(&format!("{header:<width$}", width = widths[index]));
+        }
+        if index + 1 != headers.len() {
+            output.push_str("  ");
+        }
+    }
+    output.push('\n');
+    for row in rows {
+        match row {
+            ProfileRow::Complete(row) => {
+                for (index, value) in row.iter().enumerate() {
+                    if index + 1 == row.len() {
+                        output.push_str(value);
+                    } else {
+                        output.push_str(&format!("{value:<width$}", width = widths[index]));
+                        output.push_str("  ");
+                    }
+                }
+            }
+            ProfileRow::Incomplete { name, message } => {
+                output.push_str(&format!("{name:<width$}  {message}", width = widths[0]));
+            }
+        }
+        output.push('\n');
     }
     Ok(output)
 }
@@ -707,10 +758,26 @@ mod tests {
                 last_verified: 123,
             })
             .unwrap();
+        let work = store.lock("work", true).unwrap();
+        work.save_metadata(&Metadata {
+            identity: Identity {
+                account_id: "work".into(),
+                user_id: "user".into(),
+                email: Some("work@example.invalid".into()),
+                plan_type: "self_serve_business_prolite".into(),
+            },
+            last_verified: 456,
+        })
+        .unwrap();
         let _other = store.lock("unfinished", true).unwrap();
         let output = list_profiles(&store).unwrap();
-        assert!(output.contains("personal\tme@example.invalid\tplus\t123"));
-        assert!(output.contains("unfinished\tincomplete"));
+        assert_eq!(
+            output,
+            "PROFILE   CACHED IDENTITY       PLAN                         LAST VERIFIED (UNIX SECONDS)\n\
+             personal  me@example.invalid    plus                         123\n\
+             unfinished  incomplete; use coduck login unfinished\n\
+             work      work@example.invalid  self_serve_business_prolite  456\n"
+        );
     }
     #[test]
     fn command_line_requires_explicit_profile_and_resume_id() {
