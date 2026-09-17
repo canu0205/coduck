@@ -11,6 +11,8 @@ switch between work, personal, and school accounts while keeping your chatgpt
 desktop app signed in. your codex settings, instructions, skills, memories, and
 local sessions stay shared. your usual `codex` login stays separate.
 
+![coduck demo](assets/coduck-demo.gif)
+
 ## install
 
 requires **macos** and **codex cli 0.154.0**.
