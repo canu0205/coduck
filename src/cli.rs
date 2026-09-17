@@ -2,7 +2,7 @@ use crate::{
     auth::{self, Token},
     bridge::{self, AuthRequest},
     codex::Codex,
-    profile::{Metadata, ProfileGuard, ProfileStore},
+    profile::{Metadata, ProfileGuard, ProfileStore, RuntimeGuard, SessionGuard},
     rpc::Rpc,
     terminal::Terminal,
 };
@@ -16,7 +16,7 @@ use tokio::{
     signal::unix::{Signal, SignalKind, signal},
     sync::{mpsc, watch},
     task::JoinSet,
-    time::timeout,
+    time::{Instant, timeout, timeout_at},
 };
 
 #[derive(Parser)]
@@ -51,19 +51,29 @@ pub async fn execute(args: Args) -> Result<()> {
         Action::Login { name } => (name, true),
         Action::Run { name, .. } | Action::Logout { name } => (name, false),
     };
-    let guard = store.lock(name, create)?;
-    if matches!(args.command, Action::Run { .. }) && guard.metadata()?.is_none() {
-        bail!("profile has no verified login; run coduck login {name}");
-    }
     let mut signals = Signals::new()?;
     let codex = tokio::select! {
         result = Codex::resolve() => result?,
         _ = signals.recv() => bail!("interrupted"),
     };
-    let mut helper = match spawn_rpc(codex.helper(guard.home()), &guard).await {
+    if let Action::Run { resume, .. } = &args.command {
+        let session = wait_for_profile_lock(|| store.session(name)).await?;
+        let result = run(&codex, &session, resume.as_deref(), &mut signals).await;
+        let cleared = clear_runtime(session.runtime()).await;
+        let thread = result?;
+        cleared?;
+        if let Some(thread) = thread {
+            println!(
+                "To continue this session with Coduck, run:\n  coduck run {name} --resume {thread}"
+            );
+        }
+        return Ok(());
+    }
+    let guard = wait_for_profile_lock(|| store.lock(name, create)).await?;
+    let mut helper = match spawn_rpc(codex.helper(guard.home()), guard.runtime()).await {
         Ok(helper) => helper,
         Err(error) => {
-            let _ = clear_runtime(&guard).await;
+            let _ = clear_runtime(guard.runtime()).await;
             return Err(error);
         }
     };
@@ -82,17 +92,11 @@ pub async fn execute(args: Args) -> Result<()> {
                 println!("Removed local login for {name}.");
                 Ok(())
             }
-            Action::Run {resume,..} => {
-                if let Some(session) = run(&codex, &mut helper, &guard, resume.as_deref(), &mut signals).await? {
-                    println!("To continue this session with Coduck, run:\n  coduck run {name} --resume {session}");
-                }
-                Ok(())
-            },
-            Action::List => unreachable!(),
+            Action::Run {..} | Action::List => unreachable!(),
         }
     }.await;
     let stopped = helper.shutdown().await;
-    let cleared = clear_runtime(&guard).await;
+    let cleared = clear_runtime(guard.runtime()).await;
     result.and(stopped).and(cleared)
 }
 fn list_profiles(store: &ProfileStore) -> Result<String> {
@@ -122,7 +126,7 @@ fn list_profiles(store: &ProfileStore) -> Result<String> {
     }
     Ok(output)
 }
-async fn spawn_rpc(command: Command, guard: &ProfileGuard) -> Result<Rpc> {
+async fn spawn_rpc(command: Command, guard: &RuntimeGuard) -> Result<Rpc> {
     guard.begin_spawn()?;
     let mut rpc = match Rpc::spawn(command) {
         Ok(rpc) => rpc,
@@ -140,7 +144,7 @@ async fn spawn_rpc(command: Command, guard: &ProfileGuard) -> Result<Rpc> {
     }
     Ok(rpc)
 }
-async fn clear_runtime(guard: &ProfileGuard) -> Result<()> {
+async fn clear_runtime(guard: &RuntimeGuard) -> Result<()> {
     // orphaned wrapper descendants can take a moment to be reaped by the OS.
     for _ in 0..50 {
         if guard.clear_runtime().is_ok() {
@@ -160,7 +164,7 @@ async fn verify_profile(rpc: &mut Rpc, guard: &ProfileGuard) -> Result<Token> {
 }
 async fn restart_helper(helper: &mut Rpc, command: Command, guard: &ProfileGuard) -> Result<()> {
     helper.shutdown().await?;
-    *helper = spawn_rpc(command, guard).await?;
+    *helper = spawn_rpc(command, guard.runtime()).await?;
     auth::initialize(helper).await
 }
 async fn login(
@@ -229,17 +233,61 @@ async fn logout(helper: &mut Rpc, guard: &ProfileGuard) -> Result<()> {
     auth::logout(helper).await?;
     guard.remove_metadata()
 }
+// wait asynchronously so concurrent panes can finish a short credential operation.
+async fn wait_for_profile_lock<T>(mut acquire: impl FnMut() -> Result<T>) -> Result<T> {
+    timeout(Duration::from_secs(7), async {
+        loop {
+            match acquire() {
+                Ok(guard) => return Ok(guard),
+                Err(error) if matches!(error.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock)) => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }).await.map_err(|_| anyhow!("profile credentials are busy; retry after the other operation finishes (older Coduck sessions must be closed once)"))?
+}
+
+struct ManagedAuth {
+    rpc: Rpc,
+    guard: ProfileGuard,
+}
+impl ManagedAuth {
+    async fn open(codex: &Codex, session: &SessionGuard, logout: bool) -> Result<Self> {
+        let guard = wait_for_profile_lock(|| {
+            if logout {
+                session.logout()
+            } else {
+                session.auth()
+            }
+        })
+        .await?;
+        let rpc = spawn_rpc(codex.helper(guard.home()), guard.runtime()).await?;
+        Ok(Self { rpc, guard })
+    }
+    async fn finish<T>(mut self, result: Result<T>) -> Result<T> {
+        let stopped = self.rpc.shutdown().await;
+        let cleared = clear_runtime(self.guard.runtime()).await;
+        let value = result?;
+        stopped?;
+        cleared?;
+        Ok(value)
+    }
+}
+
 async fn run(
     codex: &Codex,
-    helper: &mut Rpc,
-    guard: &ProfileGuard,
+    guard: &SessionGuard,
     resume: Option<&str>,
     signals: &mut Signals,
 ) -> Result<Option<String>> {
-    let token = tokio::select! {
-        result = verify_profile(helper, guard) => result?,
-        _ = signals.recv() => bail!("interrupted"),
-    };
+    let mut auth = ManagedAuth::open(codex, guard, false).await?;
+    let verified = async {
+        auth::initialize(&mut auth.rpc).await?;
+        verify_profile(&mut auth.rpc, &auth.guard).await
+    }
+    .await;
+    let token = auth.finish(verified).await?;
     let directory = tempfile::Builder::new()
         .prefix("coduck-")
         .permissions(std::fs::Permissions::from_mode(0o700))
@@ -247,17 +295,9 @@ async fn run(
     let socket = directory.path().join("ui.sock");
     let listener = UnixListener::bind(&socket)?;
     async {
-        let mut terminal = Terminal::spawn(codex.terminal(&socket, resume), guard).await?;
-        let result = run_terminal(
-            listener,
-            &mut terminal,
-            codex,
-            helper,
-            guard,
-            token,
-            signals,
-        )
-        .await;
+        let mut terminal =
+            Terminal::spawn(codex.terminal(&socket, resume), guard.runtime()).await?;
+        let result = run_terminal(listener, &mut terminal, codex, guard, token, signals).await;
         let stopped = if result.is_ok() {
             terminal.shutdown().await
         } else {
@@ -273,23 +313,29 @@ async fn run_terminal(
     listener: UnixListener,
     terminal: &mut Terminal,
     codex: &Codex,
-    helper: &mut Rpc,
-    guard: &ProfileGuard,
+    guard: &SessionGuard,
     token: Token,
     signals: &mut Signals,
 ) -> Result<Option<String>> {
     let (sender, receiver) = mpsc::channel(8);
     let (stop, stopped) = watch::channel(false);
     let (session, last_session) = watch::channel(None);
-    let connections =
-        serve_connections(listener, || codex.coding(), guard, sender, stopped, session);
-    let authentication = serve_auth(helper, guard, token, receiver);
+    let connections = serve_connections(
+        listener,
+        || codex.coding(),
+        guard.runtime(),
+        sender,
+        stopped.clone(),
+        session,
+    );
+    let authentication = serve_auth(codex, guard, token, receiver, stopped);
     tokio::pin!(connections, authentication);
     let mut connections_done = false;
+    let mut authentication_done = false;
     let result = loop {
         tokio::select! {
             result = &mut connections => { connections_done = true; break result; }
-            result = &mut authentication => break result,
+            result = &mut authentication => { authentication_done = true; break result; },
             result = terminal.wait() => {
                 break result.and_then(|success| {
                     if success { Ok(()) } else { Err(anyhow!("Codex terminal exited unsuccessfully")) }
@@ -308,14 +354,20 @@ async fn run_terminal(
     } else {
         connections.await
     };
-    result.and(stopped)?;
+    // finish any in-flight helper request and reap it before releasing its credential lock.
+    let authenticated = if authentication_done {
+        Ok(())
+    } else {
+        authentication.await
+    };
+    result.and(stopped).and(authenticated)?;
     Ok(last_session.borrow().clone())
 }
 
 async fn serve_connections(
     listener: UnixListener,
     coding_command: impl Fn() -> Command,
-    guard: &ProfileGuard,
+    guard: &RuntimeGuard,
     auth: mpsc::Sender<AuthRequest>,
     mut stopped: watch::Receiver<bool>,
     session: watch::Sender<Option<String>>,
@@ -372,44 +424,73 @@ async fn serve_connections(
     result.and(cleanup)
 }
 async fn serve_auth(
-    helper: &mut Rpc,
-    guard: &ProfileGuard,
+    codex: &Codex,
+    session: &SessionGuard,
     mut token: Token,
     mut requests: mpsc::Receiver<AuthRequest>,
+    mut stopped: watch::Receiver<bool>,
 ) -> Result<()> {
     let saved = token.identity.clone();
     loop {
-        tokio::select! {
-            request = requests.recv() => match request {
-                Some(AuthRequest::Login {reply}) => {
-                    let result = async {
-                        let next = timeout(Duration::from_secs(7), auth::token(helper, false))
-                            .await.map_err(|_| anyhow!("profile authentication timed out"))??;
-                        saved.ensure_same_account(&next.identity)?;
-                        guard.save_metadata(&Metadata::verified(next.identity.clone())?)?;
-                        token = next;
-                        Ok(token.login_params())
-                    }.await;
-                    let _ = reply.send(result);
-                }
-                Some(AuthRequest::Refresh {params, reply}) => {
-                    let result = async {
-                        let next = auth::refresh(helper, &saved, &token, &params).await?;
-                        guard.save_metadata(&Metadata::verified(next.identity.clone())?)?;
-                        token = next;
-                        Ok(token.refresh_result())
-                    }.await;
-                    let _ = reply.send(result);
-                }
-                Some(AuthRequest::Logout {reply}) => {
-                    let result = logout(helper, guard).await.map(|_| json!({}));
-                    let _ = reply.send(result);
-                    // let the bridge deliver the logout response before ending the run.
-                    std::future::pending::<()>().await;
-                }
-                None => return Ok(()),
-            },
-            frame = helper.recv() => { frame?; }
+        let request = tokio::select! {
+            _ = stopped.changed() => return Ok(()),
+            request = requests.recv() => match request { Some(request) => request, None => return Ok(()) },
+        };
+        let logging_out = matches!(&request, AuthRequest::Logout { .. });
+        let deadline = Instant::now() + Duration::from_secs(7);
+        // leave one second before the bridge deadline; keep the lock through cleanup.
+        let opened = timeout_at(deadline, ManagedAuth::open(codex, session, logging_out))
+            .await
+            .map_err(|_| anyhow!("profile authentication timed out"))
+            .and_then(|result| result);
+        let mut managed = None;
+        let result = match opened {
+            Err(error) => Err(error),
+            Ok(mut auth) => {
+                let result = timeout_at(deadline, async {
+                    auth::initialize(&mut auth.rpc).await?;
+                    match &request {
+                        AuthRequest::Login { .. } => {
+                            let next = verify_profile(&mut auth.rpc, &auth.guard).await?;
+                            saved.ensure_same_account(&next.identity)?;
+                            token = next;
+                            Ok(token.login_params())
+                        }
+                        AuthRequest::Refresh { params, .. } => {
+                            let next = auth::refresh(&mut auth.rpc, &saved, &token, params).await?;
+                            auth.guard
+                                .save_metadata(&Metadata::verified(next.identity.clone())?)?;
+                            token = next;
+                            Ok(token.refresh_result())
+                        }
+                        AuthRequest::Logout { .. } => {
+                            logout(&mut auth.rpc, &auth.guard).await.map(|_| json!({}))
+                        }
+                    }
+                })
+                .await
+                .map_err(|_| anyhow!("profile authentication timed out"))
+                .and_then(|result| result);
+                managed = Some(auth);
+                result
+            }
+        };
+        let logged_out = logging_out && result.is_ok();
+        let reply = match request {
+            AuthRequest::Login { reply }
+            | AuthRequest::Refresh { reply, .. }
+            | AuthRequest::Logout { reply } => reply,
+        };
+        let _ = reply.send(result);
+        if let Some(auth) = managed {
+            auth.finish(Ok(())).await?;
+        }
+        if logged_out {
+            // the bridge delivers the logout response, then asks all local clients to stop.
+            if !*stopped.borrow() {
+                let _ = stopped.changed().await;
+            }
+            return Ok(());
         }
     }
 }
@@ -522,8 +603,8 @@ mod tests {
                     cat >/dev/null
                 "#]);
                 command
-            }, &guard, auth, stopped, watch::channel(None).0).await;
-            clear_runtime(&guard).await.unwrap();
+            }, guard.runtime(), auth, stopped, watch::channel(None).0).await;
+            clear_runtime(guard.runtime()).await.unwrap();
             result
         });
         let mut main = connect(&socket).await;
@@ -589,7 +670,7 @@ mod tests {
         let guard = store.lock("personal", true).unwrap();
         let mut old = Command::new("/bin/sleep");
         old.arg("60");
-        let mut helper = spawn_rpc(old, &guard).await.unwrap();
+        let mut helper = spawn_rpc(old, guard.runtime()).await.unwrap();
         let old_pid = helper.pid().unwrap();
         let mut replacement = Command::new("/bin/sh");
         replacement.args(["-c", r#"
@@ -607,7 +688,7 @@ mod tests {
         assert_eq!(unsafe { libc::kill(old_pid as i32, 0) }, -1);
         assert!(store.lock("personal", false).is_err());
         helper.shutdown().await.unwrap();
-        clear_runtime(&guard).await.unwrap();
+        clear_runtime(guard.runtime()).await.unwrap();
         assert!(guard.metadata().unwrap().is_none());
     }
     #[test]

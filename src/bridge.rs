@@ -122,9 +122,11 @@ pub async fn run(
                         let id = request_id(&frame)?;
                         let (reply, receiver) = oneshot::channel();
                         let result = host_request(&auth, AuthRequest::Logout { reply }, receiver).await;
-                        let failed = result.is_err();
+                        if result.is_err() {
+                            write_ui(&mut socket, rpc_error(id, "could not log out; close other Coduck sessions using this profile and retry")).await?;
+                            continue;
+                        }
                         write_ui(&mut socket, auth_response(id, result)).await?;
-                        if failed { bail!("host logout failed"); }
                         return Ok(Exit::LoggedOut);
                     }
                     if frame.get("id").is_some() {
@@ -898,6 +900,26 @@ mod tests {
             receive(&mut peer).await["result"]["accessToken"],
             "new-private-token"
         );
+        ui_send(
+            &mut ui,
+            json!({"id":7,"method":"account/logout","params":{}}),
+        )
+        .await;
+        let AuthRequest::Logout { reply } = auth.recv().await.unwrap() else {
+            panic!("expected logout");
+        };
+        reply
+            .send(Err(anyhow!("another session is open; private-token")))
+            .unwrap();
+        let denied = ui_receive(&mut ui).await;
+        assert!(
+            denied["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("close other Coduck sessions")
+        );
+        assert!(!denied.to_string().contains("private-token"));
+        assert!(!bridge.is_finished());
         for method in [
             "account/login/start",
             "loginAccount",

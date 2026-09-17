@@ -1,4 +1,4 @@
-use crate::profile::ProfileGuard;
+use crate::profile::RuntimeGuard;
 use anyhow::{Result, anyhow, bail};
 use std::{
     fs::{File, OpenOptions},
@@ -21,7 +21,7 @@ pub struct Terminal {
 }
 
 impl Terminal {
-    pub async fn spawn(mut command: Command, guard: &ProfileGuard) -> Result<Self> {
+    pub async fn spawn(mut command: Command, guard: &RuntimeGuard) -> Result<Self> {
         if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
             bail!("coduck run requires an interactive terminal");
         }

@@ -30,8 +30,11 @@ coduck run personal --resume SESSION_ID
 coduck logout personal
 ```
 
-each name saves a separate login. closing a session keeps you signed in;
-`coduck logout personal` signs out only that profile.
+each name saves a separate login. run the same profile in multiple terminal
+panes, tabs, or windows. closing a session keeps you signed in.
+
+`coduck logout personal` signs out only that profile. close its other running
+sessions first; login/logout cannot change credentials used by another session.
 
 local history is shared. resuming with another account sends that conversation's
 context using the selected account.

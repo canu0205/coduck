@@ -250,16 +250,21 @@ pub async fn refresh(
         bail!("refresh requested for a different account");
     }
     saved.ensure_same_account(&previous.identity)?;
-    let next = timeout(Duration::from_secs(7), token(rpc, true))
-        .await
-        .map_err(|_| anyhow!("profile authentication refresh timed out"))??;
-    saved.ensure_same_account(&next.identity)?;
-    if next.secret == previous.secret {
-        bail!(
-            "helper could not refresh the token; retry, then log in again if the problem persists"
-        );
-    }
-    Ok(next)
+    timeout(Duration::from_secs(7), async {
+        // a fresh helper sees credentials already rotated by another session.
+        if let Ok(current) = token(rpc, false).await {
+            saved.ensure_same_account(&current.identity)?;
+            if current.secret != previous.secret {
+                return Ok(current);
+            }
+        }
+        let next = token(rpc, true).await?;
+        saved.ensure_same_account(&next.identity)?;
+        if next.secret == previous.secret {
+            bail!("helper could not refresh the token; retry, then log in again if the problem persists");
+        }
+        Ok(next)
+    }).await.map_err(|_| anyhow!("profile authentication refresh timed out"))?
 }
 pub async fn logout(rpc: &mut Rpc) -> Result<()> {
     rpc.request("account/logout", json!({})).await?;
@@ -351,6 +356,7 @@ mod tests {
         let previous = Token::parse(jwt("account", "user", "plus", now + 3600), now).unwrap();
         let (mut rpc, peer) = mock_rpc(vec![
             json!({"authMethod":"chatgpt","authToken":previous.secret}),
+            json!({"authMethod":"chatgpt","authToken":previous.secret}),
             json!({"authMethod":"chatgpt","authToken":jwt("other","user","plus",now+7200)}),
             json!({"authMethod":"chatgpt","authToken":jwt("account","user","pro",now+7200)}),
         ]);
@@ -369,6 +375,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(renewed.identity.plan_type, "pro");
+        let (mut forced, forced_peer) = mock_rpc(vec![
+            json!({"authMethod":"chatgpt","authToken":previous.secret}),
+            json!({"authMethod":"chatgpt","authToken":renewed.secret}),
+        ]);
+        assert_eq!(
+            refresh(&mut forced, &previous.identity, &previous, &params)
+                .await
+                .unwrap()
+                .identity,
+            renewed.identity
+        );
+        forced_peer.await.unwrap();
         assert!(
             refresh(
                 &mut rpc,
