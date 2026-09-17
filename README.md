@@ -15,12 +15,16 @@ local sessions stay shared. your usual `codex` login stays separate.
 
 requires **macos** and **codex cli 0.154.0**.
 
+1. install with curl
+
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/canu0205/coduck/releases/latest/download/coduck-installer.sh | sh
 ```
 
 make sure `~/.cargo/bin` is on your `PATH`.
+
+2. build from source
 
 to build from source, install rust 1.90+ and run:
 
