@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-labelledby="title description">
+  <title id="title">coduck sailor duck</title>
+  <desc id="description">a cute yellow rubber duck wearing a sailor cap and scarf</desc>
+  <metadata>SPDX-License-Identifier: CC0-1.0</metadata>
+
+  <g stroke="#202938" stroke-linecap="round" stroke-linejoin="round">
+    <path
+      fill="#ffd84d"
+      stroke-width="7"
+      d="M61 142c8-22 31-35 59-35 20 0 37 7 49 20 7 7 13 5 20-1 8-7 18-4 23 5 7 12 7 31 0 45-12 25-40 39-78 39-45 0-76-19-78-49-1-9 1-17 5-24Z"
+    />
+
+    <path
+      fill="#ffdc5d"
+      stroke-width="7"
+      d="M120 45c30 0 52 21 52 50 0 28-22 48-52 48-29 0-51-20-51-48 0-29 22-50 51-50Z"
+    />
+
+    <path
+      fill="#ff9f1c"
+      stroke-width="7"
+      d="M74 84c-13-8-28-4-36 9 8 13 24 18 40 10 4-7 2-14-4-19Z"
+    />
+    <path fill="none" stroke-width="4" d="M43 96c11 3 23 3 34-1" />
+
+    <ellipse cx="106" cy="101" rx="7" ry="8" fill="#202938" stroke="none" />
+    <circle cx="104" cy="98" r="2.5" fill="#fff" stroke="none" />
+    <ellipse cx="92" cy="118" rx="8" ry="5" fill="#ff9a76" stroke="none" opacity=".58" />
+
+    <path
+      fill="#fffdf5"
+      stroke-width="7"
+      d="M78 59c5-24 28-39 54-36 25 3 46 18 55 38 3 7-2 13-9 12L87 70c-7 0-11-5-9-11Z"
+    />
+    <path
+      fill="#315b86"
+      stroke-width="7"
+      d="M80 66c29-7 68-2 99 12l-11 15c-27-12-60-16-91-10l3-17Z"
+    />
+    <path fill="none" stroke="#315b86" stroke-width="6" d="m116 39 9 7-9 7m17 0h12" />
+
+    <path
+      fill="#315b86"
+      stroke-width="7"
+      d="M76 124c25 15 61 18 89 3l7 14c-29 18-71 18-102-2l6-15Z"
+    />
+    <circle cx="78" cy="137" r="11" fill="#315b86" stroke-width="6" />
+    <path fill="#315b86" stroke-width="6" d="m76 145-15 25 19-8 9 20 5-33-18-4Z" />
+
+    <path
+      fill="#f7be2d"
+      stroke-width="7"
+      d="M111 159c13-12 33-11 47 0-7 19-23 29-40 23-11-4-15-15-7-23Z"
+    />
+    <path fill="none" stroke-width="5" d="M120 170c9 4 20 3 29-3" />
+  </g>
+</svg>

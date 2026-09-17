@@ -1,6 +1,11 @@
+<img src="assets/coduck.svg" alt="coduck rubber duck" width="96">
+
 # coduck
 
 **multiple chatgpt accounts. one codex cli.**
+
+the name combines codex with rubber duck debugging: a small coding companion
+that lets you choose which account talks to codex.
 
 switch between work, personal, and school accounts while keeping your chatgpt
 desktop app signed in. your codex settings, instructions, skills, memories, and
