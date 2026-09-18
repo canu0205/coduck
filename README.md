@@ -15,7 +15,10 @@ local sessions stay shared. your usual `codex` login stays separate.
 
 ## install
 
-requires **macos** and **codex cli 0.154.0**.
+requires **macos** and **codex cli 0.154.0 or newer**.
+
+coduck uses Codex's app-server protocol and checks the installed CLI at startup.
+newer Codex versions are accepted when that protocol remains compatible.
 
 1. install with curl
 

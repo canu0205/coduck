@@ -8,7 +8,7 @@ use std::{
 };
 use tokio::{process::Command, time::timeout};
 
-pub const SUPPORTED_VERSION: &str = "codex-cli 0.154.0";
+pub const MIN_SUPPORTED_VERSION: &str = "0.154.0";
 pub struct Codex {
     executable: PathBuf,
     cwd: PathBuf,
@@ -45,10 +45,7 @@ impl Codex {
         .await
         .map_err(|_| anyhow!("Codex version check timed out"))?
         .map_err(|_| anyhow!("cannot execute Codex; check CODUCK_CODEX or PATH"))?;
-        if !output.status.success() || output.stdout != format!("{SUPPORTED_VERSION}\n").as_bytes()
-        {
-            bail!("unsupported Codex version; Coduck requires {SUPPORTED_VERSION}");
-        }
+        validate_version(output.status.success(), &output.stdout)?;
         Ok(codex)
     }
     fn command(&self, home: &Path, cwd: &Path) -> Command {
@@ -118,7 +115,40 @@ fn find_executable(path: &Path) -> Result<PathBuf> {
                 .map_err(|_| anyhow!("cannot resolve installed Codex executable"));
         }
     }
-    bail!("Codex executable not found; install Codex 0.154.0 and set CODUCK_CODEX or PATH")
+    bail!(
+        "Codex executable not found; install Codex {MIN_SUPPORTED_VERSION} or newer and set CODUCK_CODEX or PATH"
+    )
+}
+fn validate_version(success: bool, output: &[u8]) -> Result<()> {
+    if !success {
+        bail!("Codex version check failed");
+    }
+    let detected = std::str::from_utf8(output)
+        .ok()
+        .map(str::trim)
+        .and_then(|value| value.strip_prefix("codex-cli "))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("Codex reported an invalid version"))?;
+    let minimum =
+        parse_version(MIN_SUPPORTED_VERSION).expect("the minimum supported version must be valid");
+    let actual = parse_version(detected)
+        .ok_or_else(|| anyhow!("Codex reported an invalid version: {detected}"))?;
+    if actual < minimum {
+        bail!(
+            "unsupported Codex version; Coduck requires codex-cli {MIN_SUPPORTED_VERSION} or newer (detected {detected})"
+        );
+    }
+    Ok(())
+}
+fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
+    let core = value.split_once('-').map_or(value, |(core, _)| core);
+    let mut parts = core.split('.');
+    let version = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    parts.next().is_none().then_some(version)
 }
 #[cfg(test)]
 mod tests {
@@ -137,6 +167,17 @@ mod tests {
                 .get_envs()
                 .any(|(key, _)| key == "CODEX_CA_CERTIFICATE")
         );
+    }
+
+    #[test]
+    fn accepts_newer_codex_versions() {
+        assert!(validate_version(true, b"codex-cli 0.155.0\n").is_ok());
+    }
+
+    #[test]
+    fn rejects_older_codex_versions() {
+        let error = validate_version(true, b"codex-cli 0.153.0\n").unwrap_err();
+        assert!(error.to_string().contains("0.154.0 or newer"));
     }
     #[test]
     fn commands_keep_helper_isolated_and_coding_home_shared() {

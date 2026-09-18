@@ -7,10 +7,8 @@ use tokio::process::Command;
 
 async fn check_version() -> Result<()> {
     let version = Command::new("codex").arg("--version").output().await?;
-    assert_eq!(
-        String::from_utf8(version.stdout)?.trim(),
-        "codex-cli 0.154.0"
-    );
+    let version = String::from_utf8(version.stdout)?;
+    assert!(version.trim().starts_with("codex-cli 0."));
     Ok(())
 }
 
@@ -49,7 +47,7 @@ async fn account(rpc: &mut Rpc) -> Result<Value> {
 }
 
 #[tokio::test]
-#[ignore = "requires installed Codex 0.154.0; uses only a disposable home and dummy credentials"]
+#[ignore = "requires installed Codex 0.154.0 or newer; uses only a disposable home and dummy credentials"]
 async fn official_binary_keeps_managed_and_ephemeral_logins_separate() -> Result<()> {
     check_version().await?;
     let home = tempfile::tempdir()?;
